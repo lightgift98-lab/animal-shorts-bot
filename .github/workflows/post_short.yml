@@ -1,0 +1,66 @@
+name: Post Animal Short
+
+on:
+  schedule:
+    - cron: "0 */8 * * *"     # Runs every 8 hours (00:00, 08:00, 16:00 UTC)
+  workflow_dispatch:          # Adds a manual "Run workflow" button in GitHub
+
+concurrency:
+  group: post-short
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: System deps
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng libsndfile1 fonts-dejavu-core
+
+      - name: Python deps
+        run: pip install -r requirements.txt
+
+      - name: Cache TTS model
+        uses: actions/cache@v4
+        with: { path: models, key: kokoro-onnx-1.0 }
+
+      - name: Download TTS model (only if not cached)
+        run: |
+          mkdir -p models
+          [ -f models/kokoro-v1.0.onnx ] || curl -L --fail -o models/kokoro-v1.0.onnx \
+            https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+          [ -f models/voices-v1.0.bin ] || curl -L --fail -o models/voices-v1.0.bin \
+            https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+
+      - name: Run pipeline
+        env:
+          GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
+          FREESOUND_API_KEY:     ${{ secrets.FREESOUND_API_KEY }}
+          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python pipeline.py
+
+      - name: Save output on failure (debugging)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: failed-run, path: output/, retention-days: 3 }
+
+      - name: Commit history (prevents repeats + keeps schedule alive)
+        if: always()
+        run: |
+          git config user.name "shorts-bot"
+          git config user.email "actions@github.com"
+          git add data/history.db
+          git commit -m "log: $(date -u +%FT%TZ)" || echo "no changes"
+          git push
