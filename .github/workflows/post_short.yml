@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 */8 * * *"     # Runs every 8 hours (00:00, 08:00, 16:00 UTC)
   workflow_dispatch:          # Adds a manual "Run workflow" button in GitHub
+    inputs:
+      dry_run:
+        description: "Build the video but do NOT upload"
+        type: boolean
+        default: false
 
 concurrency:
   group: post-short
@@ -44,6 +49,8 @@ jobs:
 
       - name: Run pipeline
         env:
+          DRY_RUN:               ${{ inputs.dry_run && 'true' || 'false' }}
+          PRIVACY_STATUS:        ${{ vars.PRIVACY_STATUS || 'public' }}
           GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
           FREESOUND_API_KEY:     ${{ secrets.FREESOUND_API_KEY }}
           YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID }}
@@ -62,5 +69,9 @@ jobs:
           git config user.name "shorts-bot"
           git config user.email "actions@github.com"
           git add data/history.db
-          git commit -m "log: $(date -u +%FT%TZ)" || echo "no changes"
-          git push
+          git commit -m "log: $(date -u +%FT%TZ)" || { echo "no changes"; exit 0; }
+          for i in 1 2 3; do
+            git pull --rebase --autostash origin ${GITHUB_REF_NAME} && git push && exit 0
+            echo "push retry $i"; sleep 5
+          done
+          echo "could not push history"; exit 0
