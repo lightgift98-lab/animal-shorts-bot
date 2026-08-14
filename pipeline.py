@@ -52,21 +52,34 @@ Return ONLY valid JSON:
 "scenes":[{{"image_prompt":"...","narration":"...","caption":"...","sfx_query":"..."}}]}}"""
 
 def make_plan(recent):
+    models = ["gemini-2.0-flash", "gemini-1.5-flash"]
     body = {"contents":[{"role":"user","parts":[{"text":PLAN_PROMPT.format(
                 recent="\n".join(recent) or "(none)")}]}],
-            "generationConfig":{"temperature":1.1,"responseMimeType":"application/json"}}
-    for _ in range(4):
-        try:
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.0-flash:generateContent?key={GEMINI}",
-                json=body, timeout=90).json()
-            plan = json.loads(r["candidates"][0]["content"]["parts"][0]["text"])
-            if len(plan["scenes"]) >= 4: return plan
-        except Exception as e:
-            print("planner retry:", e)
-        time.sleep(8)
-    raise SystemExit("planner failed")
+            "generationConfig":{"temperature":1.1}}
+    for model in models:
+        for attempt in range(3):
+            try:
+                r = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model}:generateContent?key={GEMINI}",
+                    json=body, timeout=90).json()
+                if "error" in r:
+                    print(f"API error ({model}):", r["error"].get("message","unknown"))
+                    time.sleep(5)
+                    continue
+                raw = r["candidates"][0]["content"]["parts"][0]["text"]
+                # Strip markdown fences if present
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+                plan = json.loads(raw)
+                if len(plan.get("scenes", [])) >= 4:
+                    print(f"Plan OK using {model}")
+                    return plan
+                print("Plan too short, retrying...")
+            except Exception as e:
+                print(f"planner retry ({model}):", e)
+            time.sleep(8)
+    raise SystemExit("planner failed — check GEMINI_API_KEY and model availability")
 
 # ---------- 2. IMAGES (Pollinations, free, no key) ----------
 def image(prompt, seed, path):
