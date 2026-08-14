@@ -58,6 +58,16 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: python pipeline.py
 
+      - name: Upload video for review (dry run)
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dry-run-video
+          path: |
+            output/final.mp4
+            output/thumb.jpg
+          retention-days: 7
+
       - name: Save output on failure (debugging)
         if: failure()
         uses: actions/upload-artifact@v4
