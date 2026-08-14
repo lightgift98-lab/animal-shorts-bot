@@ -120,23 +120,33 @@ def make_plan(recent):
     print("Available Gemini generateContent models:")
     print(available)
 
-    # Prefer fast/cheap Flash models that actually exist for this key.
+    # Prefer current text Flash models. Older 2.x names still appear in the model
+    # list but return 404 "no longer available to new users" for new API keys,
+    # so newest-first ordering matters here.
     preferred = [
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3-flash-preview",
         "gemini-flash-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-2.5-flash",
     ]
 
-    models = [m for m in preferred if m in available]
+    def is_text_flash(m):
+        low = m.lower()
+        bad = ("image", "tts", "vision", "video", "robotics", "computer-use",
+               "deep-research", "lyria", "omni", "embedding", "eap")
+        return "flash" in low and not any(b in low for b in bad)
 
+    models = [m for m in preferred if m in available]
+    # append any other usable flash models as extra fallbacks
+    models += [m for m in available if is_text_flash(m) and m not in models]
     if not models:
-        models = [
-            m for m in available
-            if "flash" in m.lower()
-            and "vision" not in m.lower()
-            and "image" not in m.lower()
-        ][:3]
+        models = [m for m in available if "pro" in m.lower()
+                  and "image" not in m.lower() and "preview" not in m.lower()][:2]
 
     if not models:
         raise SystemExit(
@@ -159,55 +169,71 @@ def make_plan(recent):
     for model in models:
         print(f"Trying Gemini model: {model}")
 
-        try:
-            response = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{model}:generateContent?key={GEMINI}",
-                json=body,
-                timeout=90
-            )
-
-            print(f"Gemini HTTP status: {response.status_code}")
-
+        for attempt in range(3):
             try:
-                data = response.json()
-            except Exception:
-                print("Non-JSON Gemini response:")
-                print(response.text[:2000])
-                continue
-
-            if "error" in data:
-                print(
-                    "Gemini API error:",
-                    json.dumps(data["error"], indent=2)
+                response = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model}:generateContent?key={GEMINI}",
+                    json=body,
+                    timeout=90
                 )
-                continue
 
-            if "candidates" not in data:
-                print(
-                    "Gemini returned no candidates:",
-                    json.dumps(data, indent=2)[:3000]
-                )
-                continue
+                print(f"Gemini HTTP status: {response.status_code}")
 
-            raw = data["candidates"][0]["content"]["parts"][0]["text"]
+                # 404 = model retired for this key: no point retrying, next model
+                if response.status_code == 404:
+                    print(f"{model} not available to this key, skipping")
+                    break
 
-            raw = raw.strip()
+                # 503/429 = transient overload or rate limit: back off and retry
+                if response.status_code in (429, 503, 500, 502, 504):
+                    wait = 15 * (attempt + 1)
+                    print(f"transient {response.status_code}, retrying in {wait}s "
+                          f"({attempt+1}/3)")
+                    time.sleep(wait)
+                    continue
 
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1]
-                raw = raw.rsplit("```", 1)[0].strip()
+                try:
+                    data = response.json()
+                except Exception:
+                    print("Non-JSON Gemini response:")
+                    print(response.text[:2000])
+                    break
 
-            plan = json.loads(raw)
+                if "error" in data:
+                    print(
+                        "Gemini API error:",
+                        json.dumps(data["error"], indent=2)
+                    )
+                    break
 
-            if len(plan.get("scenes", [])) == 5:
-                print(f"Planner succeeded with {model}")
-                return plan
+                if "candidates" not in data:
+                    print(
+                        "Gemini returned no candidates:",
+                        json.dumps(data, indent=2)[:3000]
+                    )
+                    break
 
-            print("Gemini JSON did not contain exactly 5 scenes.")
+                raw = data["candidates"][0]["content"]["parts"][0]["text"]
 
-        except Exception as e:
-            print(f"Planner exception using {model}: {repr(e)}")
+                raw = raw.strip()
+
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1]
+                    raw = raw.rsplit("```", 1)[0].strip()
+
+                plan = json.loads(raw)
+
+                if len(plan.get("scenes", [])) == 5:
+                    print(f"Planner succeeded with {model}")
+                    return plan
+
+                print("Gemini JSON did not contain exactly 5 scenes.")
+                break
+
+            except Exception as e:
+                print(f"Planner exception using {model}: {repr(e)}")
+                break
 
     raise SystemExit("planner failed — see Gemini diagnostics above")
 
