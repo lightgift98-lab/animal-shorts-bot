@@ -52,34 +52,132 @@ Return ONLY valid JSON:
 "scenes":[{{"image_prompt":"...","narration":"...","caption":"...","sfx_query":"..."}}]}}"""
 
 def make_plan(recent):
-    models = ["gemini-2.0-flash", "gemini-1.5-flash"]
-    body = {"contents":[{"role":"user","parts":[{"text":PLAN_PROMPT.format(
-                recent="\n".join(recent) or "(none)")}]}],
-            "generationConfig":{"temperature":1.1}}
+    prompt = PLAN_PROMPT.format(
+        recent="\n".join(recent) or "(none)"
+    )
+
+    # First discover which models this API key can actually use.
+    model_response = requests.get(
+        f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI}",
+        timeout=60
+    )
+
+    try:
+        model_data = model_response.json()
+    except Exception:
+        raise SystemExit(
+            f"Gemini model-list request failed: HTTP {model_response.status_code}: "
+            f"{model_response.text[:1000]}"
+        )
+
+    if "error" in model_data:
+        raise SystemExit(
+            "Gemini API error while listing models: "
+            + json.dumps(model_data["error"], indent=2)
+        )
+
+    available = []
+
+    for model in model_data.get("models", []):
+        methods = model.get("supportedGenerationMethods", [])
+        if "generateContent" in methods:
+            name = model.get("name", "").replace("models/", "")
+            if name:
+                available.append(name)
+
+    print("Available Gemini generateContent models:")
+    print(available)
+
+    # Prefer fast/cheap Flash models that actually exist for this key.
+    preferred = [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-flash-latest",
+    ]
+
+    models = [m for m in preferred if m in available]
+
+    if not models:
+        models = [
+            m for m in available
+            if "flash" in m.lower()
+            and "vision" not in m.lower()
+            and "image" not in m.lower()
+        ][:3]
+
+    if not models:
+        raise SystemExit(
+            "Your Gemini key has no compatible generateContent Flash model."
+        )
+
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 1.0,
+            "responseMimeType": "application/json"
+        }
+    }
+
     for model in models:
-        for attempt in range(3):
+        print(f"Trying Gemini model: {model}")
+
+        try:
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:generateContent?key={GEMINI}",
+                json=body,
+                timeout=90
+            )
+
+            print(f"Gemini HTTP status: {response.status_code}")
+
             try:
-                r = requests.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/"
-                    f"{model}:generateContent?key={GEMINI}",
-                    json=body, timeout=90).json()
-                if "error" in r:
-                    print(f"API error ({model}):", r["error"].get("message","unknown"))
-                    time.sleep(5)
-                    continue
-                raw = r["candidates"][0]["content"]["parts"][0]["text"]
-                # Strip markdown fences if present
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
-                plan = json.loads(raw)
-                if len(plan.get("scenes", [])) >= 4:
-                    print(f"Plan OK using {model}")
-                    return plan
-                print("Plan too short, retrying...")
-            except Exception as e:
-                print(f"planner retry ({model}):", e)
-            time.sleep(8)
-    raise SystemExit("planner failed — check GEMINI_API_KEY and model availability")
+                data = response.json()
+            except Exception:
+                print("Non-JSON Gemini response:")
+                print(response.text[:2000])
+                continue
+
+            if "error" in data:
+                print(
+                    "Gemini API error:",
+                    json.dumps(data["error"], indent=2)
+                )
+                continue
+
+            if "candidates" not in data:
+                print(
+                    "Gemini returned no candidates:",
+                    json.dumps(data, indent=2)[:3000]
+                )
+                continue
+
+            raw = data["candidates"][0]["content"]["parts"][0]["text"]
+
+            raw = raw.strip()
+
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1]
+                raw = raw.rsplit("```", 1)[0].strip()
+
+            plan = json.loads(raw)
+
+            if len(plan.get("scenes", [])) == 5:
+                print(f"Planner succeeded with {model}")
+                return plan
+
+            print("Gemini JSON did not contain exactly 5 scenes.")
+
+        except Exception as e:
+            print(f"Planner exception using {model}: {repr(e)}")
+
+    raise SystemExit("planner failed — see Gemini diagnostics above")
 
 # ---------- 2. IMAGES (Pollinations, free, no key) ----------
 def image(prompt, seed, path):
