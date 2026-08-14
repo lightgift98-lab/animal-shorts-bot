@@ -253,17 +253,43 @@ def image(prompt, seed, path):
 
 # ---------- 3. CAPTIONS baked onto frames ----------
 def bake(src, dst, caption):
-    img = Image.open(src).convert("RGB"); d = ImageDraw.Draw(img)
-    f = ImageFont.truetype(FONT, 68); lines, cur = [], ""
-    for w_ in caption.split():
-        t = (cur+" "+w_).strip()
-        if d.textlength(t, font=f) > W-160: lines.append(cur); cur = w_
-        else: cur = t
-    lines.append(cur)
-    y = H - 300 - len(lines)*84
+    """Draw the caption onto the frame.
+
+    Pollinations ignores the requested width/height and returns whatever it
+    likes (e.g. 576x1024), so everything here is derived from the ACTUAL image
+    size. Using the global W/H put the text far below the canvas and it was
+    silently dropped.
+    """
+    img = Image.open(src).convert("RGB")
+    if img.size != (W, H):
+        img = img.resize((W, H), Image.LANCZOS)   # normalise to 9:16 1080x1920
+    iw, ih = img.size
+    d = ImageDraw.Draw(img)
+
+    size = max(34, int(iw * 0.063))               # ~68px at 1080 wide
+    f = ImageFont.truetype(FONT, size)
+    line_h = int(size * 1.24)
+    stroke = max(3, size // 9)
+
+    lines, cur = [], ""
+    for w_ in str(caption or "").split():
+        t = (cur + " " + w_).strip()
+        if d.textlength(t, font=f) > iw - int(iw * 0.15):
+            if cur: lines.append(cur)
+            cur = w_
+        else:
+            cur = t
+    if cur: lines.append(cur)
+    if not lines:
+        img.save(dst, quality=92); return
+
+    # sit the block in the lower third, always inside the frame
+    y = int(ih * 0.80) - len(lines) * line_h
+    y = max(int(ih * 0.05), min(y, ih - len(lines) * line_h - int(ih * 0.04)))
     for ln in lines:
-        d.text(((W-d.textlength(ln,font=f))/2, y), ln, font=f,
-               fill="white", stroke_width=8, stroke_fill="black"); y += 84
+        d.text(((iw - d.textlength(ln, font=f)) / 2, y), ln, font=f,
+               fill="white", stroke_width=stroke, stroke_fill="black")
+        y += line_h
     img.save(dst, quality=92)
 
 # ---------- 4. NARRATION (Kokoro, local) ----------
