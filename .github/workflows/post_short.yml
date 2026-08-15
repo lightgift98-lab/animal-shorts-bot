@@ -54,6 +54,8 @@ jobs:
           POLLINATIONS_API_KEY:  ${{ secrets.POLLINATIONS_API_KEY }}
           AI_VIDEO:              ${{ vars.AI_VIDEO || 'auto' }}
           VIDEO_MODEL:           ${{ vars.VIDEO_MODEL || 'wan-fast' }}
+          VIDEO_AUDIO:           ${{ vars.VIDEO_AUDIO || 'false' }}
+          POLLEN_RESERVE:        ${{ vars.POLLEN_RESERVE || '0.05' }}
           GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
           FREESOUND_API_KEY:     ${{ secrets.FREESOUND_API_KEY }}
           YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID }}

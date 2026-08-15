@@ -503,6 +503,54 @@ I2V_MODELS = {
 }
 
 
+def pollen_balance():
+    """Remaining Pollen, or None if it cannot be read."""
+    if not POLLEN_KEY:
+        return None
+    try:
+        r = requests.get("https://gen.pollinations.ai/account/balance",
+                         headers={"Authorization": f"Bearer {POLLEN_KEY}"},
+                         timeout=60)
+        if r.ok:
+            return float(r.json().get("balance", 0))
+        print(f"  balance check failed: HTTP {r.status_code} {r.text[:120]}")
+    except Exception as e:
+        print(f"  balance check exception: {e!r}")
+    return None
+
+
+def model_rate(model):
+    """Pollen per second of video for `model`, from the live catalogue."""
+    try:
+        for m in requests.get("https://gen.pollinations.ai/video/models",
+                              timeout=60).json():
+            if m.get("name") == model:
+                return float(m.get("pricing", {}).get("completionVideoSeconds", 0))
+    except Exception:
+        pass
+    return {"wan-fast": 0.01, "p-video": 0.02, "seedance-pro": 0.025,
+            "veo": 0.08}.get(model, 0.05)
+
+
+def afford_ai_video(scene_durs):
+    """Decide whether this run can pay for a fully AI-animated video.
+
+    All-or-nothing on purpose: half AI clips and half parallax stills in one
+    video looks inconsistent, and spending credits on a video we cannot finish
+    is pure waste. RESERVE keeps a small buffer so a price change mid-run
+    cannot overdraw the account.
+    """
+    bal = pollen_balance()
+    if bal is None:
+        return False, "balance unavailable"
+    rate = model_rate(VIDEO_MODEL)
+    need = sum(_pick_duration(VIDEO_MODEL, d) for d in scene_durs) * rate
+    reserve = float(os.environ.get("POLLEN_RESERVE", "0.05"))
+    ok = bal >= need + reserve
+    return ok, (f"balance {bal:.3f} pollen, this video needs ~{need:.3f} "
+                f"({VIDEO_MODEL} @ {rate}/s) -> {'AI VIDEO' if ok else 'motion engine'}")
+
+
 def _pick_duration(model, want):
     allowed = VIDEO_DURATIONS.get(model)
     if not allowed:
@@ -513,18 +561,16 @@ def _pick_duration(model, want):
 def upload_frame(path):
     """Publish a local frame so the video API can fetch it as a start image.
 
-    The API takes image URLs, not file uploads, so a local path is useless here.
+    The video endpoint takes image URLs, not file uploads. Untagged uploads stay
+    unlisted (reachable only by their unguessable id) and expire after 30 days.
     """
     try:
-        r = requests.post("https://gen.pollinations.ai/v1/media",
+        r = requests.post("https://media.pollinations.ai/upload",
                           headers={"Authorization": f"Bearer {POLLEN_KEY}"},
                           files={"file": (path.name, path.read_bytes(), "image/jpeg")},
                           timeout=180)
         if r.ok:
-            j = r.json()
-            url = j.get("url") or j.get("id")
-            if url and not str(url).startswith("http"):
-                url = f"https://gen.pollinations.ai/{url}"
+            url = r.json().get("url")
             if url:
                 return url
         print(f"  frame upload failed: HTTP {r.status_code} {r.text[:160]}")
@@ -585,6 +631,25 @@ def make_clips(plan, starts, video_dur):
     """
     clips = []
     n = len(plan["scenes"])
+
+    # Decide ONCE, before spending anything, whether this run can afford a fully
+    # AI-animated video. Mixing generated clips with parallax stills in the same
+    # video looks inconsistent, so it is all or nothing.
+    slots = [(starts[i+1] if i+1 < len(starts) else video_dur) - starts[i]
+             + (XF if i < n-1 else 0) for i in range(n)]
+    use_ai = False
+    if POLLEN_KEY and AI_VIDEO != "never":
+        if AI_VIDEO == "always":
+            use_ai = True
+            print("[budget] AI_VIDEO=always -> generating regardless of balance")
+        else:
+            use_ai, why = afford_ai_video(slots)
+            print(f"[budget] {why}")
+    elif AI_VIDEO == "never":
+        print("[budget] AI_VIDEO=never -> free motion engine")
+    else:
+        print("[budget] no POLLINATIONS_API_KEY -> free motion engine")
+
     for i, sc in enumerate(plan["scenes"]):
         slot = (starts[i+1] if i+1 < len(starts) else video_dur) - starts[i]
         d = slot + (XF if i < n-1 else 0)
@@ -595,7 +660,7 @@ def make_clips(plan, starts, video_dur):
         clip = OUT/f"clip{i}.mp4"
 
         made = None
-        if AI_VIDEO in ("auto", "always") and POLLEN_KEY:
+        if use_ai:
             # pass the photoreal still as the start frame so the AI clip animates
             # THIS animal rather than inventing a new one each scene
             raw = ai_clip(f"{sc.get('image_prompt','')}. {PHOTO_MOTION}",
