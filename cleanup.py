@@ -25,7 +25,9 @@ def service():
     cred = Credentials(
         None, client_id=YT_ID, client_secret=YT_SEC, refresh_token=YT_REFRESH,
         token_uri="https://oauth2.googleapis.com/token",
-        scopes=["https://www.googleapis.com/auth/youtube",
+        # must match the scopes the refresh token was originally granted, or the
+        # token exchange fails with invalid_scope
+        scopes=["https://www.googleapis.com/auth/youtube.upload",
                 "https://www.googleapis.com/auth/youtube.force-ssl"],
     )
     cred.refresh(Request())
