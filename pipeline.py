@@ -508,19 +508,27 @@ I2V_MODELS = {
 
 
 def pollen_balance():
-    """Remaining Pollen, or None if it cannot be read."""
+    """(balance, reason). balance is None when it cannot be read.
+
+    A 403 means the key simply lacks the read-only 'account:usage' permission -
+    it says nothing about whether the key can generate video. That case is
+    reported separately so the caller can still try.
+    """
     if not POLLEN_KEY:
-        return None
+        return None, "no key"
     try:
         r = requests.get("https://gen.pollinations.ai/account/balance",
                          headers={"Authorization": f"Bearer {POLLEN_KEY}"},
                          timeout=60)
         if r.ok:
-            return float(r.json().get("balance", 0))
+            return float(r.json().get("balance", 0)), "ok"
+        if r.status_code in (401, 403):
+            return None, "no-permission"
         print(f"  balance check failed: HTTP {r.status_code} {r.text[:120]}")
+        return None, f"http {r.status_code}"
     except Exception as e:
         print(f"  balance check exception: {e!r}")
-    return None
+        return None, "error"
 
 
 def model_rate(model):
@@ -544,10 +552,17 @@ def afford_ai_video(scene_durs):
     is pure waste. RESERVE keeps a small buffer so a price change mid-run
     cannot overdraw the account.
     """
-    bal = pollen_balance()
-    if bal is None:
-        return False, "balance unavailable"
+    bal, why = pollen_balance()
     rate = model_rate(VIDEO_MODEL)
+    if bal is None:
+        need = sum(_pick_duration(VIDEO_MODEL, d) for d in scene_durs) * rate
+        if why == "no-permission":
+            # The key cannot read the balance but may still be able to spend.
+            # Try anyway: ai_clip() detects 402 (out of credits) and falls back
+            # to the free engine, and a rejected call costs nothing.
+            return True, (f"balance not readable (key lacks account:usage) - "
+                          f"trying {VIDEO_MODEL} anyway, ~{need:.3f} pollen needed")
+        return False, f"balance unavailable ({why})"
     need = sum(_pick_duration(VIDEO_MODEL, d) for d in scene_durs) * rate
     reserve = float(os.environ.get("POLLEN_RESERVE", "0.05"))
     ok = bal >= need + reserve
