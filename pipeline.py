@@ -22,6 +22,7 @@ VOICE      = os.environ.get("KOKORO_VOICE", "af_heart")
 POLLEN_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "wan-fast")
 AI_VIDEO   = os.environ.get("AI_VIDEO", "auto").lower()   # auto | always | never
+VIDEO_AUDIO = os.environ.get("VIDEO_AUDIO", "").lower() in ("1","true","yes")
 
 def require(name, value):
     if not value:
@@ -266,6 +267,13 @@ def make_plan(recent):
 # photograph; the negative words suppress the illustrated look.
 # Kept deliberately SHORT. A long style block drowns out the scene description and
 # the model returns a generic portrait instead of the requested shot.
+# Motion guidance for video models: describe how the animal MOVES, not just how
+# the frame looks. Still-image style words alone produce a near-frozen clip.
+PHOTO_MOTION = (
+    "the animal moves naturally with lifelike motion, real fur and muscle "
+    "movement, smooth continuous action, subtle camera follow, filmed footage"
+)
+
 PHOTO_STYLE = (
     "candid pet photograph, real animal, realistic detailed fur, shallow depth of "
     "field, natural light, 8k, not a cartoon, not a 3d render, no text"
@@ -469,29 +477,97 @@ def animate(src, dst, dur, idx, cap_png=None):
     return dst
 
 
-def ai_clip(prompt, out, dur, start_img=None):
-    """Generate a real AI-animated clip via Pollinations.
+# Per-model duration limits from the API docs. Requesting an out-of-range
+# duration is rejected, and each model clamps differently.
+VIDEO_DURATIONS = {
+    "veo":               [4, 6, 8],
+    "seedance-pro":      list(range(2, 11)),
+    "seedance-2.0":      list(range(4, 16)),
+    "seedance-2.0-mini": list(range(4, 11)),
+    "seedance-2.0-fast": [4, 5],
+    "seedance-2.5":      [4],
+    "minimax-h3":        [5],
+    "wan":               list(range(2, 16)),
+    "wan-fast":          [5],
+    "wan-pro":           list(range(2, 16)),
+    "p-video":           list(range(2, 11)),
+    "nova-reel":         [6, 12],
+}
+# Models that accept a start frame (image-to-video). Feeding our photoreal still
+# in as image[0] keeps the animal identical to the rest of the video.
+I2V_MODELS = {
+    "veo", "seedance-pro", "seedance-2.0", "seedance-2.0-mini",
+    "seedance-2.0-fast", "seedance-2.5", "wan", "wan-fast", "wan-pro",
+    "p-video", "grok-video-pro", "grok-imagine-video-1.5", "happyhorse-1.1",
+    "nova-reel",
+}
 
-    Returns None on any failure so the caller can fall back to the free motion
+
+def _pick_duration(model, want):
+    allowed = VIDEO_DURATIONS.get(model)
+    if not allowed:
+        return int(max(1, min(120, round(want))))
+    return min(allowed, key=lambda d: abs(d - want))
+
+
+def upload_frame(path):
+    """Publish a local frame so the video API can fetch it as a start image.
+
+    The API takes image URLs, not file uploads, so a local path is useless here.
+    """
+    try:
+        r = requests.post("https://gen.pollinations.ai/v1/media",
+                          headers={"Authorization": f"Bearer {POLLEN_KEY}"},
+                          files={"file": (path.name, path.read_bytes(), "image/jpeg")},
+                          timeout=180)
+        if r.ok:
+            j = r.json()
+            url = j.get("url") or j.get("id")
+            if url and not str(url).startswith("http"):
+                url = f"https://gen.pollinations.ai/{url}"
+            if url:
+                return url
+        print(f"  frame upload failed: HTTP {r.status_code} {r.text[:160]}")
+    except Exception as e:
+        print(f"  frame upload exception: {e!r}")
+    return None
+
+
+def ai_clip(prompt, out, dur, start_img=None):
+    """Generate a genuinely animated clip via Pollinations video models.
+
+    Returns None on any failure so the caller falls back to the free motion
     engine - a paid outage must never take the channel down.
     """
     if not POLLEN_KEY:
         return None
     try:
-        params = {"key": POLLEN_KEY, "model": VIDEO_MODEL,
-                  "duration": int(max(4, min(10, round(dur)))),
-                  "aspectRatio": "9:16"}
-        if start_img:
-            params["image[0]"] = str(start_img)
+        d = _pick_duration(VIDEO_MODEL, dur)
+        params = {"model": VIDEO_MODEL, "duration": d, "aspectRatio": "9:16"}
+        if VIDEO_AUDIO:
+            params["audio"] = "true"
+
+        # image-to-video keeps the generated animal consistent with the stills
+        if start_img and VIDEO_MODEL in I2V_MODELS:
+            url = upload_frame(start_img) if not str(start_img).startswith("http") else str(start_img)
+            if url:
+                params["image"] = url
+                print(f"  using start frame: {url[:70]}")
+
         r = requests.get("https://gen.pollinations.ai/video/" +
-                         requests.utils.quote(prompt, safe=""),
-                         params=params, timeout=600)
+                         requests.utils.quote(prompt[:1200], safe=""),
+                         params=params,
+                         headers={"Authorization": f"Bearer {POLLEN_KEY}"},
+                         timeout=900)
         ct = r.headers.get("content-type", "")
         if r.ok and ct.startswith("video"):
             out.write_bytes(r.content)
-            print(f"  ai_clip ok ({len(r.content)//1024} KB, {VIDEO_MODEL})")
+            print(f"  ai_clip ok: {VIDEO_MODEL} {d}s, {len(r.content)//1024} KB")
             return out
-        print(f"  ai_clip failed: HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code == 402:
+            print("  ai_clip: OUT OF POLLEN CREDITS -> falling back to motion engine")
+        else:
+            print(f"  ai_clip failed: HTTP {r.status_code} {r.text[:200]}")
     except Exception as e:
         print(f"  ai_clip exception: {e!r}")
     return None
@@ -520,7 +596,10 @@ def make_clips(plan, starts, video_dur):
 
         made = None
         if AI_VIDEO in ("auto", "always") and POLLEN_KEY:
-            raw = ai_clip(sc.get("image_prompt", ""), OUT/f"ai{i}.mp4", d)
+            # pass the photoreal still as the start frame so the AI clip animates
+            # THIS animal rather than inventing a new one each scene
+            raw = ai_clip(f"{sc.get('image_prompt','')}. {PHOTO_MOTION}",
+                          OUT/f"ai{i}.mp4", d, start_img=frame)
             if raw:
                 # conform the AI clip to our canvas and stamp the caption on
                 sh("ffmpeg", "-y", "-i", str(raw), "-loop", "1", "-i", str(cap),
