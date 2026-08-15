@@ -18,6 +18,10 @@ YT_ID      = os.environ.get("YOUTUBE_CLIENT_ID", "")
 YT_SEC     = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
 YT_REFRESH = os.environ.get("YOUTUBE_REFRESH_TOKEN", "")
 VOICE      = os.environ.get("KOKORO_VOICE", "af_heart")
+# Optional real AI video. Without a key the bot uses the free ffmpeg motion engine.
+POLLEN_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
+VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "wan-fast")
+AI_VIDEO   = os.environ.get("AI_VIDEO", "auto").lower()   # auto | always | never
 
 def require(name, value):
     if not value:
@@ -252,6 +256,43 @@ def image(prompt, seed, path):
     raise SystemExit(f"image failed: {path.name}")
 
 # ---------- 3. CAPTIONS baked onto frames ----------
+def caption_png(caption, path):
+    """Render the caption to a transparent PNG.
+
+    It must be composited AFTER the parallax, not baked into the source image:
+    the still is split into two depth layers that move at different speeds, so
+    text baked in beforehand gets duplicated and ghosts apart on screen.
+    """
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    size = max(34, int(W * 0.063))
+    f = ImageFont.truetype(FONT, size)
+    line_h = int(size * 1.24)
+    stroke = max(3, size // 9)
+
+    lines, cur = [], ""
+    for w_ in str(caption or "").split():
+        t = (cur + " " + w_).strip()
+        if d.textlength(t, font=f) > W - int(W * 0.15):
+            if cur: lines.append(cur)
+            cur = w_
+        else:
+            cur = t
+    if cur: lines.append(cur)
+    if not lines:
+        img.save(path); return path
+
+    y = int(H * 0.80) - len(lines) * line_h
+    y = max(int(H * 0.05), min(y, H - len(lines) * line_h - int(H * 0.04)))
+    for ln in lines:
+        d.text(((W - d.textlength(ln, font=f)) / 2, y), ln, font=f,
+               fill=(255, 255, 255, 255), stroke_width=stroke,
+               stroke_fill=(0, 0, 0, 255))
+        y += line_h
+    img.save(path)
+    return path
+
+
 def bake(src, dst, caption):
     """Draw the caption onto the frame.
 
@@ -318,22 +359,176 @@ def sfx(query, path):
     return False
 
 # ---------- 6. ASSEMBLE ----------
+def _motion_mask(path):
+    """Static soft-oval alpha mask, built once and reused.
+
+    Doing this in PIL instead of ffmpeg's geq is ~11x faster (5s vs 55s per clip).
+    """
+    from PIL import ImageFilter
+    if path.exists():
+        return path
+    m = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(m).ellipse(
+        [int(W*0.06), int(H*0.28), int(W*0.94), int(H*0.86)], fill=255)
+    m.filter(ImageFilter.GaussianBlur(70)).save(path)
+    return path
+
+
+def animate(src, dst, dur, idx, cap_png=None):
+    """Turn a still into a genuinely moving shot.
+
+    Two depth layers: a slow, blurred background pushing one way and a masked
+    foreground subject pushing harder the other way. That parallax offset is
+    what reads as real motion rather than a flat Ken Burns zoom. Adds a slow
+    handheld sway and, on some scenes, drifting particles.
+    """
+    f = max(2, int(dur * FPS))
+    mask = _motion_mask(OUT / "_mask.png")
+
+    # alternate the push direction per scene so cuts feel choreographed
+    d = 1 if idx % 2 == 0 else -1
+    bg_z = f"1.04+0.09*(on/{f})"
+    fg_z = f"1.10+0.24*(on/{f})"
+    bg_x = f"iw/2-(iw/zoom/2)-{28*d}*(on/{f})"
+    fg_x = f"iw/2-(iw/zoom/2)+{78*d}*(on/{f})"
+    fg_y = f"ih/2-(ih/zoom/2)+30*sin(2*PI*on/{f})"     # gentle bob
+
+    chain = (
+        f"[0:v]scale={W}:{H},setsar=1,split=2[a][b];"
+        f"[a]scale=2200:-1,zoompan=z='{bg_z}':x='{bg_x}':y='ih/2-(ih/zoom/2)':"
+        f"d={f}:s={W}x{H}:fps={FPS},gblur=sigma=4[bg];"
+        f"[b]scale=2500:-1,zoompan=z='{fg_z}':x='{fg_x}':y='{fg_y}':"
+        f"d={f}:s={W}x{H}:fps={FPS}[fgc];"
+        f"[1:v]scale={W}:{H},format=gray,fps={FPS}[mk];"
+        f"[fgc][mk]alphamerge[fga];"
+        f"[bg][fga]overlay=0:0[comp];"
+    )
+
+    if idx % 2 == 1:                                   # particles on alternate scenes
+        chain += (
+            f"nullsrc=s={W}x{H}:d={dur:.2f}:r={FPS},format=gray,"
+            f"geq=lum='if(lt(random(1)*340,1),255,0)',boxblur=2:1[snow];"
+            f"[comp][snow]blend=all_mode=screen:all_opacity=0.45[lit];"
+            f"[lit]"
+        )
+    else:
+        chain += "[comp]"
+
+    # slow handheld sway, then crop the wobble margin away
+    chain += (
+        f"rotate='0.006*sin(2*PI*t/5)':ow=iw:oh=ih,"
+        f"crop=iw*0.94:ih*0.94,scale={W}:{H},setsar=1,format=yuv420p[v]"
+    )
+
+    args = ["ffmpeg", "-y", "-loop", "1", "-i", str(src),
+            "-loop", "1", "-i", str(mask)]
+    if cap_png:
+        # composite the caption on top of the finished motion so it stays rock steady
+        args += ["-loop", "1", "-i", str(cap_png)]
+        chain = chain.replace("[v]", "[mv];") + \
+            f"[2:v]scale={W}:{H},fps={FPS}[cap];[mv][cap]overlay=0:0:format=auto[v]"
+    args += ["-t", f"{dur:.3f}", "-filter_complex", chain, "-map", "[v]",
+             "-frames:v", str(f), "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "20", "-pix_fmt", "yuv420p", str(dst)]
+    sh(*args)
+    return dst
+
+
+def ai_clip(prompt, out, dur, start_img=None):
+    """Generate a real AI-animated clip via Pollinations.
+
+    Returns None on any failure so the caller can fall back to the free motion
+    engine - a paid outage must never take the channel down.
+    """
+    if not POLLEN_KEY:
+        return None
+    try:
+        params = {"key": POLLEN_KEY, "model": VIDEO_MODEL,
+                  "duration": int(max(4, min(10, round(dur)))),
+                  "aspectRatio": "9:16"}
+        if start_img:
+            params["image[0]"] = str(start_img)
+        r = requests.get("https://gen.pollinations.ai/video/" +
+                         requests.utils.quote(prompt, safe=""),
+                         params=params, timeout=600)
+        ct = r.headers.get("content-type", "")
+        if r.ok and ct.startswith("video"):
+            out.write_bytes(r.content)
+            print(f"  ai_clip ok ({len(r.content)//1024} KB, {VIDEO_MODEL})")
+            return out
+        print(f"  ai_clip failed: HTTP {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"  ai_clip exception: {e!r}")
+    return None
+
+
+TRANSITIONS = ["smoothleft", "smoothright", "fadeblack", "wipeleft", "circleopen"]
+XF = 0.35        # transition length in seconds
+
+
 def make_clips(plan, starts, video_dur):
+    """Animate every scene, then join them with real transitions.
+
+    Clips are cut XF longer than their slot because each xfade consumes XF
+    seconds of overlap; without that padding the video ends up short.
+    """
     clips = []
+    n = len(plan["scenes"])
     for i, sc in enumerate(plan["scenes"]):
-        d = (starts[i+1] if i+1 < len(starts) else video_dur) - starts[i]
-        frames = int(d*FPS)+1
-        baked = OUT/f"baked{i}.jpg"; bake(OUT/f"img{i}.jpg", baked, sc["caption"])
-        xf = f"(iw-iw/zoom)*(on/{frames})" if i%2==0 else f"(iw-iw/zoom)*(1-on/{frames})"
-        vf = (f"scale={W*2}:{H*2},zoompan=z='min(zoom+0.0007,1.18)':x='{xf}':"
-              f"y='(ih-ih/zoom)/2':d={frames}:s={W}x{H}:fps={FPS},format=yuv420p")
+        slot = (starts[i+1] if i+1 < len(starts) else video_dur) - starts[i]
+        d = slot + (XF if i < n-1 else 0)
+        # normalise the still to 1080x1920 (Pollinations returns 576x1024)
+        frame = OUT/f"frame{i}.jpg"
+        Image.open(OUT/f"img{i}.jpg").convert("RGB").resize((W, H), Image.LANCZOS).save(frame, quality=94)
+        cap = caption_png(sc.get("caption", ""), OUT/f"cap{i}.png")
         clip = OUT/f"clip{i}.mp4"
-        sh("ffmpeg","-y","-i",str(baked),"-vf",vf,"-frames:v",str(frames),
-           "-c:v","libx264","-preset","veryfast","-crf","20",str(clip))
-        clips.append(clip)
-    (OUT/"clips.txt").write_text("".join(f"file '{c.name}'\n" for c in clips))
-    sh("ffmpeg","-y","-f","concat","-safe","0","-i",str(OUT/"clips.txt"),
-       "-c","copy",str(OUT/"noaudio.mp4"))
+
+        made = None
+        if AI_VIDEO in ("auto", "always") and POLLEN_KEY:
+            raw = ai_clip(sc.get("image_prompt", ""), OUT/f"ai{i}.mp4", d)
+            if raw:
+                # conform the AI clip to our canvas and stamp the caption on
+                sh("ffmpeg", "-y", "-i", str(raw), "-loop", "1", "-i", str(cap),
+                   "-t", f"{d:.3f}", "-filter_complex",
+                   f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                   f"crop={W}:{H},fps={FPS}[b];"
+                   f"[1:v]scale={W}:{H},fps={FPS}[c];[b][c]overlay=0:0[v]",
+                   "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast",
+                   "-crf", "20", "-pix_fmt", "yuv420p", str(clip))
+                made = clip
+        if made is None:
+            if AI_VIDEO == "always" and POLLEN_KEY:
+                raise RuntimeError(f"AI_VIDEO=always but scene {i} could not be generated")
+            made = animate(frame, clip, d, i, cap)
+        clips.append(made)
+
+    if len(clips) == 1:
+        sh("ffmpeg", "-y", "-i", str(clips[0]), "-c", "copy", str(OUT/"noaudio.mp4"))
+        return
+
+    # chain xfades. Each clip is XF longer than its slot, and every xfade eats
+    # XF of overlap, so offset_i = offset_{i-1} + dur_{i-1} - XF. Getting this
+    # wrong silently shortens the video (25.0s -> 23.97s).
+    inputs, filt, prev = [], [], "[0:v]"
+    for c in clips:
+        inputs += ["-i", str(c)]
+    durs = [(starts[i+1] if i+1 < len(starts) else video_dur) - starts[i]
+            + (XF if i < len(clips)-1 else 0) for i in range(len(clips))]
+    off = durs[0] - XF
+    for i in range(1, len(clips)):
+        lbl = f"[x{i}]"
+        filt.append(f"{prev}[{i}:v]xfade=transition={TRANSITIONS[(i-1) % len(TRANSITIONS)]}"
+                    f":duration={XF}:offset={max(0.1, off):.3f}{lbl}")
+        prev = lbl
+        if i < len(clips) - 1:
+            off += durs[i] - XF
+    filt.append(f"{prev}fps={FPS},setsar=1,format=yuv420p[v]")
+
+    sh("ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filt),
+       "-map", "[v]", "-t", f"{video_dur:.3f}",
+       "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+       "-pix_fmt", "yuv420p", str(OUT/"noaudio.mp4"))
+
 
 def mix(plan, starts, video_dur, atempo):
     # NOTE: input 0 is noaudio.mp4 (video), so audio inputs are numbered from 1.

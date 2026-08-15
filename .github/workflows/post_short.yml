@@ -51,6 +51,9 @@ jobs:
         env:
           DRY_RUN:               ${{ inputs.dry_run && 'true' || 'false' }}
           PRIVACY_STATUS:        ${{ vars.PRIVACY_STATUS || 'public' }}
+          POLLINATIONS_API_KEY:  ${{ secrets.POLLINATIONS_API_KEY }}
+          AI_VIDEO:              ${{ vars.AI_VIDEO || 'auto' }}
+          VIDEO_MODEL:           ${{ vars.VIDEO_MODEL || 'wan-fast' }}
           GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
           FREESOUND_API_KEY:     ${{ secrets.FREESOUND_API_KEY }}
           YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID }}
