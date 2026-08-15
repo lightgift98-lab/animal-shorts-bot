@@ -67,7 +67,9 @@ def db():
 
 # ---------- 1. PLAN (Gemini free tier) ----------
 PLAN_PROMPT = """You are the creative director of a family-friendly YouTube Shorts channel
-of funny ANIMATED animal stories (bright 3D-cartoon style).
+of funny REAL animal moments that look like genuine wildlife/pet footage.
+Absolutely NOT cartoon, NOT 3D render, NOT illustration - these must read as
+real photographs of real animals caught on camera.
 Create ONE new ~25-second vertical video concept.
 Previously used titles (avoid anything similar):
 {recent}
@@ -77,8 +79,27 @@ Rules:
 - Exactly 5 scenes. Each scene has: image_prompt, narration (1-2 sentences),
   caption (max 5 words, NO emoji), sfx_query (1-3 words, e.g. "cartoon boing").
 - Every image_prompt must START with the exact same character description from the
-  "character" field, then the scene, then "vertical 9:16, cute 3D animated cartoon,
-  vibrant colors, expressive face".
+  "character" field, then the scene. Do NOT append style words yourself; the
+  pipeline adds the photographic style suffix.
+- The "character" field must describe a REAL animal with specific, repeatable
+  physical detail (species, age, exact coat/marking colors, eye color, one
+  distinguishing feature) so the same animal is recognisable in all 5 scenes.
+  Example: "a small ginger tabby kitten with a white chest patch, one folded left
+  ear and bright green eyes".
+- Scenes must be physically plausible for a real animal - no talking, no props a
+  real pet could not interact with, no impossible physics.
+- IMPORTANT - each image_prompt must describe ONE clear pose plus ONE camera
+  framing, and nothing else. The image model reliably renders the animal, its
+  pose and the shot type, but ignores complicated multi-object interactions.
+  Do NOT ask for the animal manipulating objects (knocking over a jar, opening a
+  door, treats scattering). Instead vary POSE and CAMERA across the 5 scenes:
+  e.g. "extreme close-up of only its eyes peeking over a table edge, low angle",
+  "full body mid-air leap, side view, motion blur background",
+  "close-up of one paw raised toward the camera, head tilted",
+  "curled up asleep in a basket, seen from directly above, top-down".
+  Tell the STORY in the narration and captions; let the images carry mood.
+- The 5 image_prompts must use 5 DIFFERENT framings (extreme close-up, full body,
+  low angle, top-down, side profile) so the video does not look repetitive.
 - Total narration 55-70 words, playful tone.
 - Title under 70 chars, catchy, max one emoji.
 - description: 2 sentences. tags: 10-15. thumbnail_text: max 4 words UPPERCASE.
@@ -240,6 +261,16 @@ def make_plan(recent):
                 break
 
     raise SystemExit("planner failed — see Gemini diagnostics above")
+
+# Photographic style suffix. Camera/lens language pushes the model toward a real
+# photograph; the negative words suppress the illustrated look.
+# Kept deliberately SHORT. A long style block drowns out the scene description and
+# the model returns a generic portrait instead of the requested shot.
+PHOTO_STYLE = (
+    "candid pet photograph, real animal, realistic detailed fur, shallow depth of "
+    "field, natural light, 8k, not a cartoon, not a 3d render, no text"
+)
+
 
 # ---------- 2. IMAGES (Pollinations, free, no key) ----------
 def image(prompt, seed, path):
@@ -405,10 +436,14 @@ def animate(src, dst, dur, idx, cap_png=None):
     )
 
     if idx % 2 == 1:                                   # particles on alternate scenes
+        # Both blend inputs must be forced to the same RGB format. Without this the
+        # filter inherits the noise source's 'gray' format and the result loses
+        # its colour channels (frames came out bright magenta).
         chain += (
+            f"[comp]format=gbrp[compc];"
             f"nullsrc=s={W}x{H}:d={dur:.2f}:r={FPS},format=gray,"
-            f"geq=lum='if(lt(random(1)*340,1),255,0)',boxblur=2:1[snow];"
-            f"[comp][snow]blend=all_mode=screen:all_opacity=0.45[lit];"
+            f"geq=lum='if(lt(random(1)*340,1),255,0)',boxblur=2:1,format=gbrp[snow];"
+            f"[compc][snow]blend=all_mode=screen:all_opacity=0.45,format=yuv420p[lit];"
             f"[lit]"
         )
     else:
@@ -643,7 +678,7 @@ def main():
 
     seed = random.randint(1, 10**6); char = plan.get("character","")
     for i, sc in enumerate(plan["scenes"]):
-        image(f"{char} {sc['image_prompt']}", seed+i, OUT/f"img{i}.jpg")
+        image(f"{char} {sc['image_prompt']}. {PHOTO_STYLE}", seed+i, OUT/f"img{i}.jpg")
 
     narrate(" ".join(s["narration"] for s in plan["scenes"]), OUT/"narration.wav")
     nd = dur(OUT/"narration.wav")
