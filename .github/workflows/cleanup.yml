@@ -1,0 +1,35 @@
+name: Delete uploaded videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_ids:
+        description: "Space-separated video IDs (leave blank = delete ALL published)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -q google-api-python-client google-auth google-auth-oauthlib
+      - name: Delete
+        env:
+          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python cleanup.py ${{ inputs.video_ids }}
+      - name: Commit history
+        if: always()
+        run: |
+          git config user.name "shorts-bot"
+          git config user.email "actions@github.com"
+          git add data/history.db
+          git commit -m "cleanup: $(date -u +%FT%TZ)" || exit 0
+          git pull --rebase --autostash origin ${GITHUB_REF_NAME} && git push
