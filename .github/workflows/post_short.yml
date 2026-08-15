@@ -60,7 +60,8 @@ jobs:
         env:
           DRY_RUN:               ${{ inputs.dry_run && 'true' || 'false' }}
           PRIVACY_STATUS:        ${{ vars.PRIVACY_STATUS || 'public' }}
-          POLLINATIONS_API_KEY:  ${{ secrets.POLLINATIONS_API_KEY }}
+          # accept either name: the repo secret is SK_VIDEO
+          POLLINATIONS_API_KEY:  ${{ secrets.POLLINATIONS_API_KEY || secrets.SK_VIDEO }}
           AI_VIDEO:              ${{ vars.AI_VIDEO || 'auto' }}
           VIDEO_MODEL:           ${{ inputs.model || vars.VIDEO_MODEL || 'wan-fast' }}
           SAMPLE_SCENES:         ${{ inputs.sample_scenes || '0' }}
