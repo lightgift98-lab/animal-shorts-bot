@@ -258,3 +258,57 @@ Every odd-numbered scene came out bright magenta. The particle overlay blends a
 `blend` filter inherited `gray` and stripped the colour channels. Both inputs are
 now forced to `gbrp`, with `yuv420p` restored after. Verified per-clip: the mean
 RGB of all five scenes is now balanced.
+
+---
+
+# Round 4: real animated motion (requires credits)
+
+You want the animals themselves to move, not a camera move over a still. That
+needs a video model, and there is no free way to do it.
+
+## Every Pollinations video model is paid
+
+Checked the live catalogue: **15 video models, 0 free.** `nova-reel` reports
+`paid_only: None` but still returns `401` without a key. There is no anonymous
+video generation.
+
+| Model | per 25s Short | 3/day monthly | notes |
+|---|---|---|---|
+| `wan-fast` | $0.25 | ~$22 | 5s silent clips, 480p |
+| `p-video` | $0.50 | ~$45 | 720p/1080p |
+| `seedance-pro` | $0.62 | ~$56 | 480p-1080p, start frame |
+| `veo` | $2.00 | ~$180 | best quality, optional audio |
+
+Free-tier allowance is 1.5 Pollen/week ≈ 6 `wan-fast` clips — and one 25s Short
+needs 5 clips. So the free tier funds roughly **one video a week**, not 21.
+
+## The code is now correct against the real API
+
+The first version of `ai_clip()` was written without the docs and was wrong:
+
+- `image[0]` is not a parameter. The docs use `image`, and it must be a **public
+  URL** — a local file path silently does nothing. Added `upload_frame()`.
+- Duration is a per-model whitelist, not a range: `veo` 4/6/8, `wan-fast`
+  exactly 5, `seedance-2.5` exactly 4, `nova-reel` multiples of 6. Added
+  `VIDEO_DURATIONS` + `_pick_duration()`.
+- `Authorization: Bearer` header instead of `?key=`.
+- Added `audio` flag, `402` out-of-credits detection, per-model I2V gating.
+
+Two quality details that matter:
+
+- **The scene still is fed in as the start frame**, so the video model animates
+  *that* animal instead of inventing a new one every scene. This is what keeps
+  the character consistent across the 25 seconds.
+- **`PHOTO_MOTION`** describes how the animal *moves*. Prompting a video model
+  with still-photography words alone produces a nearly frozen clip.
+
+## Turning it on
+
+1. Get a key at [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys) (`sk_…`) and add Pollen credits.
+2. Repo → Settings → Secrets → Actions → new secret `POLLINATIONS_API_KEY`.
+3. Optional repo variables: `VIDEO_MODEL` (default `wan-fast`), `VIDEO_AUDIO=true`,
+   `AI_VIDEO` = `auto` (default) / `always` / `never`.
+
+`auto` uses AI video when credits exist and silently falls back to the free
+motion engine when they run out, so the channel never goes dark. Start with
+`wan-fast` to confirm the look, then move up to `seedance-pro` or `veo`.
