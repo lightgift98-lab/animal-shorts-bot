@@ -23,6 +23,10 @@ POLLEN_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "wan-fast")
 AI_VIDEO   = os.environ.get("AI_VIDEO", "auto").lower()   # auto | always | never
 VIDEO_AUDIO = os.environ.get("VIDEO_AUDIO", "").lower() in ("1","true","yes")
+# Collapse the storyboard to N scenes. Fewer, longer AI clips cost the same total
+# seconds but leave more budget headroom per clip - useful for a first sample on
+# a small free balance.
+SAMPLE_SCENES = int(os.environ.get("SAMPLE_SCENES", "0") or 0)
 
 def require(name, value):
     if not value:
@@ -667,13 +671,21 @@ def make_clips(plan, starts, video_dur):
                           OUT/f"ai{i}.mp4", d, start_img=frame)
             if raw:
                 # conform the AI clip to our canvas and stamp the caption on
+                # The model returns a fixed length (wan-fast is exactly 5s) which
+                # rarely equals our slot. -t alone can only shorten, so a short
+                # clip would silently break the xfade chain and the 25s total.
+                # tpad clones the final frame to reach the exact slot length.
                 sh("ffmpeg", "-y", "-i", str(raw), "-loop", "1", "-i", str(cap),
-                   "-t", f"{d:.3f}", "-filter_complex",
+                   "-filter_complex",
                    f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
-                   f"crop={W}:{H},fps={FPS}[b];"
-                   f"[1:v]scale={W}:{H},fps={FPS}[c];[b][c]overlay=0:0[v]",
-                   "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast",
+                   f"crop={W}:{H},fps={FPS},tpad=stop_mode=clone:stop_duration=10,"
+                   f"trim=duration={d:.3f},setpts=PTS-STARTPTS[b];"
+                   f"[1:v]scale={W}:{H},fps={FPS}[c];[b][c]overlay=0:0:shortest=1[v]",
+                   "-map", "[v]", "-an", "-t", f"{d:.3f}",
+                   "-c:v", "libx264", "-preset", "veryfast",
                    "-crf", "20", "-pix_fmt", "yuv420p", str(clip))
+                if abs(dur(clip) - d) > 0.15:
+                    print(f"  WARNING scene {i}: clip {dur(clip):.2f}s != slot {d:.2f}s")
                 made = clip
         if made is None:
             if AI_VIDEO == "always" and POLLEN_KEY:
@@ -819,6 +831,14 @@ def main():
         "SELECT title FROM videos ORDER BY rowid DESC LIMIT 30")]
     plan = make_plan(recent)
     print("idea:", plan["idea"], "| title:", plan["title"])
+
+    if SAMPLE_SCENES and 0 < SAMPLE_SCENES < len(plan["scenes"]):
+        keep = plan["scenes"]
+        # keep the hook, the funniest middle beat and the payoff
+        idx = [0, len(keep)//2, len(keep)-1][:SAMPLE_SCENES]
+        if SAMPLE_SCENES == 2: idx = [0, len(keep)-1]
+        plan["scenes"] = [keep[i] for i in idx]
+        print(f"[sample] collapsed {len(keep)} scenes -> {len(plan['scenes'])}")
 
     seed = random.randint(1, 10**6); char = plan.get("character","")
     for i, sc in enumerate(plan["scenes"]):
