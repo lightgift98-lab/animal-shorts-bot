@@ -15,4 +15,7 @@ jobs:
           YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-        run: python check_auth.py
+        run: |
+          python check_auth.py
+          echo "--- actual channel contents ---"
+          python list_videos.py
