@@ -10,6 +10,14 @@ on:
         description: "Build the video but do NOT upload"
         type: boolean
         default: false
+      model:
+        description: "Video model override (blank = repo default)"
+        required: false
+        default: ""
+      sample_scenes:
+        description: "Collapse to N scenes for a cheap test (blank = all 5)"
+        required: false
+        default: ""
 
 concurrency:
   group: post-short
@@ -54,7 +62,8 @@ jobs:
           PRIVACY_STATUS:        ${{ vars.PRIVACY_STATUS || 'public' }}
           POLLINATIONS_API_KEY:  ${{ secrets.POLLINATIONS_API_KEY }}
           AI_VIDEO:              ${{ vars.AI_VIDEO || 'auto' }}
-          VIDEO_MODEL:           ${{ vars.VIDEO_MODEL || 'wan-fast' }}
+          VIDEO_MODEL:           ${{ inputs.model || vars.VIDEO_MODEL || 'wan-fast' }}
+          SAMPLE_SCENES:         ${{ inputs.sample_scenes || '0' }}
           VIDEO_AUDIO:           ${{ vars.VIDEO_AUDIO || 'false' }}
           POLLEN_RESERVE:        ${{ vars.POLLEN_RESERVE || '0.05' }}
           GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
