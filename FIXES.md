@@ -163,3 +163,58 @@ Dry runs now upload `final.mp4` + `thumb.jpg` as a **dry-run-video** artifact.
 3. When ready to go live, run the workflow **without** dry run. The cron fires at
    00:00 / 08:00 / 16:00 UTC. Set repo variable `PRIVACY_STATUS=unlisted` first if
    you want to review the first few before they're public.
+
+---
+
+# Round 2: making the videos actually move
+
+You said the output looked static. It was: five AI stills with one slow zoom each.
+
+## The motion engine (free, default)
+
+`animate()` now builds every scene from two depth layers:
+
+- **background** — scaled up, blurred, pushed slowly one direction
+- **foreground** — the subject through a soft oval mask, pushed *harder* the other
+  direction, with a gentle vertical bob
+
+That differential between layers is what the eye reads as depth and motion,
+rather than a flat zoom. On top of it:
+
+- slow handheld sway (`rotate` on a sine), cropped so no black edges appear
+- drifting particles on alternate scenes
+- push direction alternates per scene so cuts feel choreographed
+- real `xfade` transitions: smoothleft, smoothright, fadeblack, wipeleft, circleopen
+
+Measured inter-frame change went from a near-static pan to **15–26 per frame pair
+within a scene, 81 across a transition**.
+
+### Three bugs found while building it
+
+1. **`geq` alpha mask was unusably slow** — 55s per 5-second clip. Pre-rendering
+   the mask once in PIL and reusing it as an alpha channel: **5s**, an 11x speedup.
+2. **Captions ghosted.** Baking text into the still before the split meant *both*
+   parallax layers carried the caption and they drifted apart on screen. Captions
+   are now rendered to a transparent PNG and composited **after** the motion.
+3. **Videos came out 23.97s, not 25.00s.** Each `xfade` consumes `XF` seconds of
+   overlap. Correct chaining is `offset_i = offset_{i-1} + dur_{i-1} - XF`, with
+   every clip cut `XF` longer than its slot.
+
+## Optional: real AI-generated video
+
+Set `POLLINATIONS_API_KEY` (secret) to generate genuine AI motion per scene.
+
+| `VIDEO_MODEL` | per 25s video | 3/day monthly |
+|---|---|---|
+| `wan-fast` (default) | $0.25 | ~$22 |
+| `p-video` 720p | $0.50 | ~$45 |
+| `seedance-pro` | $0.62 | ~$56 |
+| `veo` | $2.00 | ~$180 |
+
+`AI_VIDEO` (repo variable): `auto` (default — use AI when a key exists, fall back
+to the motion engine on any failure), `always` (fail loudly instead), `never`.
+
+**Free tiers cannot sustain 3 videos/day.** Pollinations' free Spore tier is
+1.5 Pollen/week ≈ 6 wan-fast videos, and you need 21. Kling/Hailuo/Luma/Seedance
+free tiers are web-UI only (no API) and mostly watermarked and non-commercial.
+The hybrid exists so paid credits are a bonus, never a dependency.
