@@ -619,20 +619,37 @@ def ai_clip(prompt, out, dur, start_img=None):
                 params["image"] = url
                 print(f"  using start frame: {url[:70]}")
 
-        r = requests.get("https://gen.pollinations.ai/video/" +
-                         requests.utils.quote(prompt[:1200], safe=""),
-                         params=params,
-                         headers={"Authorization": f"Bearer {POLLEN_KEY}"},
-                         timeout=900)
-        ct = r.headers.get("content-type", "")
-        if r.ok and ct.startswith("video"):
-            out.write_bytes(r.content)
-            print(f"  ai_clip ok: {VIDEO_MODEL} {d}s, {len(r.content)//1024} KB")
-            return out
-        if r.status_code == 402:
-            print("  ai_clip: OUT OF POLLEN CREDITS -> falling back to motion engine")
-        else:
+        url = ("https://gen.pollinations.ai/video/" +
+               requests.utils.quote(prompt[:1200], safe=""))
+        # One retry: long generations occasionally drop the connection
+        # (RemoteDisconnected), which previously cost a whole scene.
+        for attempt in range(2):
+            try:
+                r = requests.get(url, params=params,
+                                 headers={"Authorization": f"Bearer {POLLEN_KEY}"},
+                                 timeout=900)
+            except Exception as e:
+                print(f"  ai_clip network error ({e.__class__.__name__}), "
+                      f"attempt {attempt+1}/2")
+                if attempt == 0:
+                    time.sleep(20)
+                    continue
+                return None
+
+            ct = r.headers.get("content-type", "")
+            if r.ok and ct.startswith("video"):
+                out.write_bytes(r.content)
+                print(f"  ai_clip ok: {VIDEO_MODEL} {d}s, {len(r.content)//1024} KB")
+                return out
+            if r.status_code == 402:
+                print("  ai_clip: OUT OF POLLEN CREDITS -> falling back to motion engine")
+                return None
+            if r.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                print(f"  ai_clip transient {r.status_code}, retrying in 20s")
+                time.sleep(20)
+                continue
             print(f"  ai_clip failed: HTTP {r.status_code} {r.text[:200]}")
+            return None
     except Exception as e:
         print(f"  ai_clip exception: {e!r}")
     return None
