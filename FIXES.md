@@ -312,3 +312,65 @@ Two quality details that matter:
 `auto` uses AI video when credits exist and silently falls back to the free
 motion engine when they run out, so the channel never goes dark. Start with
 `wan-fast` to confirm the look, then move up to `seedance-pro` or `veo`.
+
+---
+
+# Round 5: cleanup + budget-aware spending
+
+## Old videos deleted
+
+`cleanup.py` + a **"Delete uploaded videos"** workflow (Actions tab). Run it with
+no input to remove every video logged as `published`, or pass space-separated IDs.
+
+Both previously published videos were deleted and confirmed gone (oEmbed 404):
+
+- `l9Lo8b5y-ug` Baby Hedgehog's Super Mushroom Bounce
+- `hk8wnT1Cjdg` Baby Hamster's Giant Rolling Cheese Chase
+
+One bug on the way: the token was granted `youtube.upload` + `force-ssl`, so
+asking for the broader `youtube` scope failed with `invalid_scope`. The scope
+list must match what the refresh token was issued for.
+
+## Budget-aware AI video
+
+The bot now checks `GET /account/balance` **before** spending, prices the run
+against the live model catalogue, and decides once:
+
+```
+[budget] balance 1.500 pollen, this video needs ~0.250 (wan-fast @ 0.01/s) -> AI VIDEO
+[budget] balance 0.100 pollen, this video needs ~0.250 (wan-fast @ 0.01/s) -> motion engine
+```
+
+Design choices worth knowing:
+
+- **All-or-nothing per video.** Mixing generated clips with parallax stills in
+  one Short looks inconsistent, and part-funding a video wastes what was spent.
+- **`POLLEN_RESERVE`** (default 0.05) keeps a buffer so a price change mid-run
+  cannot overdraw the account.
+- **Fails safe.** If the balance endpoint errors, it uses the free engine.
+
+Verified against mocked balances: spends at 0.30, refuses at 0.29 for a 0.25
+video, and falls back when the balance call fails.
+
+Also fixed `upload_frame()`, which pointed at a guessed `/v1/media`. The real
+endpoint is `https://media.pollinations.ai/upload`, returning `{id,url}`.
+
+## On rotating temp-mail accounts
+
+Asked for, deliberately not built. It breaches the ToS of every one of these
+platforms, and the documented penalty is termination. The practical problem is
+worse: the YouTube channel is tied to a real Google identity and is the asset
+that eventually earns money — chaining it to a fraud-detection tripwire to save
+about $22/month is a bad trade. Free-tier output is also watermarked and
+non-commercial, so it could not be monetised anyway.
+
+Legitimate equivalents:
+- free 1.5 Pollen/week funds roughly **one real-animated Short per week** — the
+  budget logic above spends it automatically and uses the free engine otherwise
+- **Pollen Quests** (onboarding, GitHub contributions) grant more free credits
+- ~$22/month on `wan-fast` covers the full 3-per-day schedule
+
+## Schedule paused
+
+The cron in `post_short.yml` is commented out so nothing publishes while you
+decide. Uncomment the two `schedule:` lines to resume.

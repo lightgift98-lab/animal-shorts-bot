@@ -1,8 +1,9 @@
 name: Post Animal Short
 
 on:
-  schedule:
-    - cron: "0 */8 * * *"     # Runs every 8 hours (00:00, 08:00, 16:00 UTC)
+  # SCHEDULE PAUSED. Uncomment to resume automatic posting every 8 hours.
+  # schedule:
+  #   - cron: "0 */8 * * *"     # 00:00, 08:00, 16:00 UTC
   workflow_dispatch:          # Adds a manual "Run workflow" button in GitHub
     inputs:
       dry_run:
