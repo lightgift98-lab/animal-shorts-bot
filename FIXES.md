@@ -218,3 +218,43 @@ to the motion engine on any failure), `always` (fail loudly instead), `never`.
 1.5 Pollen/week ≈ 6 wan-fast videos, and you need 21. Kling/Hailuo/Luma/Seedance
 free tiers are web-UI only (no API) and mostly watermarked and non-commercial.
 The hybrid exists so paid credits are a bonus, never a dependency.
+
+---
+
+# Round 3: photorealistic instead of cartoon
+
+The channel now produces real-looking animal footage, not 3D-cartoon stories.
+
+## What changed
+
+- **Planner** asks for genuine wildlife/pet moments and requires a specific,
+  repeatable physical description (species, coat markings, eye colour, one
+  distinguishing feature) so the same animal is recognisable across all 5 scenes.
+- **`PHOTO_STYLE`** suffix added in code: camera and film language plus negative
+  terms (`not a cartoon, not a 3d render`).
+
+## Two things testing revealed
+
+**1. A long style block backfires.** The first version was a full paragraph of
+camera/lens detail. It drowned out the scene description and the model returned
+the same generic portrait for every prompt — five near-identical shots of a cat
+sitting. Shortening it to one line restored scene control.
+
+**2. The free model renders pose and framing, not actions.** Prompts asking the
+animal to knock over a jar or scatter treats were silently ignored; the model
+just drew the animal. But "extreme close-up peeking over a table edge, low
+angle", "full body mid-air leap, side view", and "curled asleep in a basket,
+top-down" all rendered correctly and look distinct.
+
+So the planner is now instructed to vary **pose and camera framing** across the
+five scenes (extreme close-up / full body / low angle / top-down / side profile)
+and to carry the story through narration and captions instead. This plays to
+what the model does well and also stops the video looking repetitive.
+
+## Bug: magenta frames
+
+Every odd-numbered scene came out bright magenta. The particle overlay blends a
+`format=gray` noise source over the frame, and without an explicit format the
+`blend` filter inherited `gray` and stripped the colour channels. Both inputs are
+now forced to `gbrp`, with `yuv420p` restored after. Verified per-clip: the mean
+RGB of all five scenes is now balanced.
