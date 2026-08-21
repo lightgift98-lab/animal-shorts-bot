@@ -2,7 +2,8 @@ name: Post Animal Short
 
 on:
   schedule:
-    - cron: "0 */8 * * *"     # every 8 hours (00:00, 08:00, 16:00 UTC)
+    # 5x a day, evenly spread (~4h48m apart) across the clock
+    - cron: "0 1,6,11,16,21 * * *"   # 01,06,11,16,21 UTC
   workflow_dispatch:          # Adds a manual "Run workflow" button in GitHub
     inputs:
       dry_run:

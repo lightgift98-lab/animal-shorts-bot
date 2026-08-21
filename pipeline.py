@@ -76,40 +76,55 @@ of funny REAL animal moments that look like genuine wildlife/pet footage.
 Absolutely NOT cartoon, NOT 3D render, NOT illustration - these must read as
 real photographs of real animals caught on camera.
 Create ONE new ~25-second vertical video concept.
-Previously used titles (avoid anything similar):
+
+Previously used titles (avoid anything similar in WORDING and in SUBJECT):
 {recent}
 
+TOPIC - pick something genuinely different each time:
+- Invent a RANDOM everyday animal event: a misunderstanding, a stand-off, a
+  friendship, a theft, a nap pile, a chase, a copycat moment, a rivalry over a
+  sunny spot, a first meeting, a shared discovery.
+- STRONGLY PREFER 2-3 ANIMALS interacting. Multi-animal scenes are more
+  entertaining than a single animal alone. Use one animal only if the idea is
+  genuinely better that way.
+- Mix it up: different species, different settings (kitchen, garden, barn,
+  snow, beach, windowsill, forest), different times of day.
+- Combine species that plausibly share a space and are visually DISTINCT from
+  each other (a kitten and a puppy, a duckling and a rabbit, two different cats).
+  Avoid extreme size mismatches - the image model tends to redraw the small one
+  as another copy of the large one.
+
+TITLE - vary the structure. Do NOT start every title with "Baby" and do NOT
+reuse the words "Epic" or "Dramatic". Use questions, numbers, dialogue-style
+phrasing, or a plain statement of the funny event.
+
 Rules:
-- One funny animal character; harmless cute comedy; strong hook in scene 1; funny payoff at the end.
+- Harmless cute comedy; strong hook in scene 1; funny payoff at the end.
 - Exactly 5 scenes. Each scene has: image_prompt, narration (1-2 sentences),
   caption (max 5 words, NO emoji), sfx_query (1-3 words, e.g. "cartoon boing").
-- Every image_prompt must START with the exact same character description from the
-  "character" field, then the scene. Do NOT append style words yourself; the
+- The "cast" field describes every animal with specific, repeatable physical
+  detail (species, age, exact coat/marking colors, eye colour, one distinguishing
+  feature) so the SAME animals are recognisable in all 5 scenes.
+  Example: "a small ginger tabby kitten with a white chest patch and green eyes,
+  and a chubby black pug puppy with a grey muzzle".
+- Every image_prompt must START with the exact cast description of the animals
+  visible in that shot, then the scene. Do NOT append style words yourself; the
   pipeline adds the photographic style suffix.
-- The "character" field must describe a REAL animal with specific, repeatable
-  physical detail (species, age, exact coat/marking colors, eye color, one
-  distinguishing feature) so the same animal is recognisable in all 5 scenes.
-  Example: "a small ginger tabby kitten with a white chest patch, one folded left
-  ear and bright green eyes".
-- Scenes must be physically plausible for a real animal - no talking, no props a
+- Scenes must be physically plausible for real animals - no talking, no props a
   real pet could not interact with, no impossible physics.
-- IMPORTANT - each image_prompt must describe ONE clear pose plus ONE camera
-  framing, and nothing else. The image model reliably renders the animal, its
-  pose and the shot type, but ignores complicated multi-object interactions.
-  Do NOT ask for the animal manipulating objects (knocking over a jar, opening a
-  door, treats scattering). Instead vary POSE and CAMERA across the 5 scenes:
-  e.g. "extreme close-up of only its eyes peeking over a table edge, low angle",
-  "full body mid-air leap, side view, motion blur background",
-  "close-up of one paw raised toward the camera, head tilted",
-  "curled up asleep in a basket, seen from directly above, top-down".
-  Tell the STORY in the narration and captions; let the images carry mood.
+- IMPORTANT - each image_prompt must describe the animals, ONE clear pose or
+  simple interaction, and ONE camera framing. Nothing else. The image model
+  renders animals, poses, simple pairings (sitting side by side, touching noses,
+  one behind another, in a row) and shot types reliably, but IGNORES complicated
+  object manipulation. Do NOT ask for animals knocking things over, opening
+  doors, or carrying objects. Tell the STORY in narration and captions.
 - The 5 image_prompts must use 5 DIFFERENT framings (extreme close-up, full body,
   low angle, top-down, side profile) so the video does not look repetitive.
 - Total narration 55-70 words, playful tone.
 - Title under 70 chars, catchy, max one emoji.
 - description: 2 sentences. tags: 10-15. thumbnail_text: max 4 words UPPERCASE.
 Return ONLY valid JSON:
-{{"idea":"...","character":"...","title":"...","description":"...","tags":["..."],
+{{"idea":"...","cast":"...","title":"...","description":"...","tags":["..."],
 "thumbnail_text":"...",
 "scenes":[{{"image_prompt":"...","narration":"...","caption":"...","sfx_query":"..."}}]}}"""
 
@@ -860,7 +875,7 @@ def main():
         require("YOUTUBE_REFRESH_TOKEN", YT_REFRESH)
     con = db()
     recent = [r[0] for r in con.execute(
-        "SELECT title FROM videos ORDER BY rowid DESC LIMIT 30")]
+        "SELECT title FROM videos ORDER BY rowid DESC LIMIT 60")]
     plan = make_plan(recent)
     print("idea:", plan["idea"], "| title:", plan["title"])
 
@@ -872,7 +887,9 @@ def main():
         plan["scenes"] = [keep[i] for i in idx]
         print(f"[sample] collapsed {len(keep)} scenes -> {len(plan['scenes'])}")
 
-    seed = random.randint(1, 10**6); char = plan.get("character","")
+    seed = random.randint(1, 10**6)
+    # "cast" is the new multi-animal field; older plans used "character"
+    char = plan.get("cast") or plan.get("character", "")
     for i, sc in enumerate(plan["scenes"]):
         image(f"{char} {sc['image_prompt']}. {PHOTO_STYLE}", seed+i, OUT/f"img{i}.jpg")
 
